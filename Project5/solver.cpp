@@ -1,13 +1,43 @@
 #include"stu.h"
 
+void free_solver(solver* s, int clauses_number, int variables_number) {
+	if (s == NULL)return;
+	for (int j = 0; j < variables_number; j++) {
+		if (s->variables != NULL && s->variables[j].neg_clauses != NULL) {
+			free(s->variables[j].neg_clauses);
+			s->variables[j].neg_clauses = NULL;
+		}
+		if (s->variables != NULL && s->variables[j].neg_clauses != NULL) {
+			free(s->variables[j].pos_clauses);
+			s->variables[j].pos_clauses = NULL;
+		}
+	}
+	for (int i = 0; i < clauses_number; i++)
+		if (s->clauses != NULL && s->clauses[i].literals != NULL) {
+			free(s->clauses[i].literals);
+			s->clauses[i].literals = NULL;
+		}
+	if (s->clauses != NULL)free(s->clauses);
+	if (s->variables != NULL)free(s->variables);
+	if (s->trail != NULL)free(s->trail);
+	if (s->trail_level != NULL)free(s->trail_level);
+	s->clauses = NULL;
+	s->variables = NULL;
+	s->trail = NULL;
+	s->trail_level = NULL;
+	free(s);
+	s = NULL;
+}
+
 solver* init_solver(FILE*input,int variables_number,int clause_number) {
 	solver*s = (solver*)calloc(1,sizeof(solver));
 	if (s == NULL)goto error;  //init s
 	s->clauses = NULL;
+	s->decision_level = 0;
 	s->var_count = variables_number;
 	s->clause_count = clause_number;
-	s->var_increasement = 1.0;
-	s->decision_level = 0;  //init variables under s
+	s->assigned_num = 0;
+	s->var_increasement = 1.0;//init variables under s
 
 	s->clauses = (Clause*)malloc(clause_number*sizeof(Clause));
 	for (int i = 0; i < clause_number; i++)s->clauses[i].literals = NULL;
@@ -43,73 +73,123 @@ solver* init_solver(FILE*input,int variables_number,int clause_number) {
 	
 error:
 	printf("fail to allocate memory for s\n");
-	for (int j = 0; j <variables_number; j++) {
-		if (s->variables != NULL && s->variables[j].neg_clauses != NULL) {
-			free(s->variables[j].neg_clauses);
-			s->variables[j].neg_clauses = NULL;
-		}
-		if (s->variables != NULL && s->variables[j].neg_clauses != NULL) {
-			free(s->variables[j].pos_clauses);
-			s->variables[j].pos_clauses = NULL;
-		}
-	}
-	for (int i = 0; i < clause_number; i++) 
-		if (s->clauses != NULL && s->clauses[i].literals != NULL) {
-			free(s->clauses[i].literals);
-			s->clauses[i].literals = NULL;
-		}
-	if (s->clauses != NULL)free(s->clauses);
-	if (s->variables != NULL)free(s->variables);
-	if (s->trail != NULL)free(s->trail);
-	if (s->trail_level != NULL)free(s->trail_level);
-	s->clauses = NULL;
-	s->variables = NULL;
-	s->trail = NULL;
-	s->trail_level = NULL;
-	free(s);
-	s = NULL;
+	free_solver(s,clause_number,variables_number);
 	return NULL;
 }
 
-void free_solver(solver*s,int clauses_number,int variables_number) {
-	if (s == NULL)return;
-	for (int j = 0; j < variables_number; j++) {
-		if (s->variables != NULL && s->variables[j].neg_clauses != NULL) {
-			free(s->variables[j].neg_clauses);
-			s->variables[j].neg_clauses = NULL;
-		}
-		if (s->variables != NULL && s->variables[j].neg_clauses != NULL) {
-			free(s->variables[j].pos_clauses);
-			s->variables[j].pos_clauses = NULL;
-		}
-	}
-	for (int i = 0; i < clauses_number; i++)
-		if (s->clauses != NULL && s->clauses[i].literals != NULL) {
-			free(s->clauses[i].literals);
-			s->clauses[i].literals = NULL;
-		}
-	if (s->clauses != NULL)free(s->clauses);
-	if (s->variables != NULL)free(s->variables);
-	if (s->trail != NULL)free(s->trail);
-	if (s->trail_level != NULL)free(s->trail_level);
-	s->clauses = NULL;
-	s->variables = NULL;
-	s->trail = NULL;
-	s->trail_level = NULL;
-	free(s);
-	s = NULL;
-}
+
 
 bool unit_propagation(solver* s);
-void backtrack(solver* s);
+void backtrack(solver* s,int level);
 bool all_satisfied(solver* s);
 int select_variables(solver* s);
 bool all_assigned(solver* s);
 bool assign_new_variables(solver* s, int var, Assignment assign);
+void decay_activities(solver* s);
 
-void decay_activities(solver* s) {
-	s->var_increasement /= 0.95;  // 增量扩大，抵消衰减影响
+Clause* analyze_conflict(solver* s, Clause* conflict_clause) {  //learn from conflict clause,也就是说这是和单元传播原则配合起来运用的
+
+	if (s == NULL || conflict_clause == NULL)return NULL;
+	Literals* learned_literals = (Literals*)malloc(sizeof(Literals)*conflict_clause->size);
+	if (learned_literals == NULL)return NULL;
+	int learned_size = conflict_clause->size;//creat new leatned_literals
+
+	memcpy(learned_literals, conflict_clause->literals, learned_size * sizeof(Literals));//copy the conflict clause
+
+	int current_level = s->decision_level;
+	int uip_count = 0;
+
+	while (true) {
+
+		uip_count = 0;
+		Literals pivot;
+		pivot.value = 0;
+		pivot.sign = false;
+
+		for (int i = 0; i < learned_size; i++) {
+			int var_idx = learned_literals[i].value - 1;
+			if (s->variables[var_idx].decision_level == current_level) {
+				uip_count++;
+				pivot = learned_literals[i];//find the decisions which are dicided in this decision level,and the last one is the point
+			}
+		}
+
+		if (uip_count <= 1)break;
+
+		for (int i = 0; i < learned_size; i++) 
+			if (learned_literals[i].value == pivot.value && learned_literals[i].sign != pivot.sign) {  //去除枢纽节点的反文字
+				learned_literals[i] = learned_literals[--learned_size];
+				break;
+			}
+
+			Clause* reason = s->variables[pivot.value - 1].reason;
+			if (reason == NULL)break;
+
+			for (unsigned int i = 0; i < reason->size; i++) {
+				Literals l = reason->literals[i];
+				bool exist=false;
+				for (int j = 0; j < learned_size; j++) {
+					if (learned_literals[j].value == l.value && learned_literals[i].sign == l.sign) {
+						exist = true;
+						break;
+					}
+				}
+				if (!exist) {
+					learned_literals = (Literals*)realloc(learned_literals, (learned_size + 1) * sizeof(Literals));
+					learned_literals[learned_size++] = l;
+				}
+			}
+		
+	}
+
+	Clause* learned_clause = (Clause*)malloc(sizeof(Clause));
+	learned_clause->literals = (Literals*)malloc(learned_size * sizeof(Literals));
+	learned_clause->size = learned_size;
+	learned_clause->is_learned = true;
+	learned_clause->state = false;
+	learned_clause->watch1 = 0;
+	learned_clause->watch2 = (learned_size > 1) ? 1 : 0;
+	memcpy(learned_clause->literals, learned_literals, learned_size*sizeof(Literals));
+	free(learned_literals);
+
+	return learned_clause;
 }
+
+bool handle_conflict(solver* s, Clause* conflict_clause) {
+	if (s->decision_level == 0)return false;
+
+	Clause* learned_clause = analyze_conflict(s, conflict_clause);
+	if (learned_clause == NULL) return false;
+
+	s->clauses = (Clause*)realloc(s->clauses, (s->clause_count + 1) * sizeof(Clause));
+	if (s->clauses == NULL) {
+		free(learned_clause->literals);
+		free(learned_clause);
+		return false;
+	}
+	s->clauses[s->clause_count] = *learned_clause;
+	s->clause_count++;
+	free(learned_clause); // 已复制，释放临时内存
+
+	// 4. 计算回溯层级（学到的子句中最高的决策层 - 1）
+	int backtrack_level = 0;
+	for (unsigned int i = 0; i < learned_clause->size; i++) {
+		int var_idx = learned_clause->literals[i].value - 1;
+		int level = s->variables[var_idx].decision_level;
+		if (level > backtrack_level && level < s->decision_level) {
+			backtrack_level = level;
+		}
+	}
+
+	// 5. 执行回溯
+	backtrack(s,s->decision_level-backtrack_level); // 需要更改
+
+	// 6. 对学到的子句执行单元传播（可能产生新的赋值）
+	return unit_propagation(s);
+	
+}
+
+
 
 bool dpll(solver* s) {
 	if (!unit_propagation(s))return false;//apply unit_propagation 
@@ -118,18 +198,20 @@ bool dpll(solver* s) {
 
 	int var = select_variables(s);      
 	if (var == -1) return all_satisfied(s);//select a new variables
-
+	
 	decay_activities(s);
 
 	if (!assign_new_variables(s, var, TRUE))return false;;
+	s->assigned_num += 1;
 	if (dpll(s))return true;//make the variable TRUE and dpll
-
-	backtrack(s);
+	
+	backtrack(s,1);
 
 	if(!assign_new_variables(s, var, FALSE))return false;
+	s->assigned_num += 1;
 	if (dpll(s))return true;//make the variable FALSE and dpll
 
-	backtrack(s);
+	backtrack(s,1);
 
 	return false;//they're all false,and it means conlict
 }
@@ -144,109 +226,115 @@ void bump_variable(solver*s,int var_idx) {
 		s->var_increasement *= 1e-100;
 	}
 }
+static inline bool is_literal_falsified(Variable* var, bool sign) {
+	return (var->assignment == TRUE && !sign) ||
+		(var->assignment == FALSE && sign);
+}
+static inline bool is_literal_satisfied(Variable* var, bool sign) {
+	return (var->assignment == TRUE && sign) ||
+		(var->assignment == FALSE && !sign);
+}
 
 bool unit_propagation(solver* s) {
 	int trail_head = 0;
 	while (trail_head < s->trail_size) {
-		int var_idx = s->trail[trail_head] - 1;
-		Variable* var = &s->variables[var_idx];
 
-		// 获取当前变量赋值对应的子句列表（被证伪的文字所在的子句）
+		int var_idx = s->trail[trail_head++] - 1;
+		Variable* var = &s->variables[var_idx];//从历史轨迹中挑出赋值的变量
+
+		
 		Clause** clauses = (var->assignment == TRUE) ? var->neg_clauses : var->pos_clauses;
-		int clause_count = (var->assignment == TRUE) ? var->neg_count : var->pos_count;
-		bump_variable(s, var_idx);
-		trail_head++; 
+		int clause_count = (var->assignment == TRUE) ? var->neg_count : var->pos_count;//根据赋值情况寻找变量被证伪的子句
+
+		bump_variable(s, var_idx);//bump the activity
+		
 
 		for (int i = 0; i < clause_count; i++) {
-			Clause* c = clauses[i];
-			if (c->state) continue;  // 子句已满足，跳过
+			Clause* c = clauses[i];//遍历证伪的子句集
 
-			// 确定哪个监视点被当前赋值证伪
+			//if (c->state)
+			//	continue;  //if satifyed,continue
+
+
+		
 			Literals l1 = c->literals[c->watch1];
 			Literals l2 = c->literals[c->watch2];
+			
 			bool watch1_falsified = false;
 			bool watch2_falsified = false;
+			if (l1.value == var_idx + 1)
+				watch1_falsified = is_literal_falsified(var, l1.sign);
+			if (l2.value == var_idx + 1)
+				watch2_falsified = is_literal_falsified(var, l2.sign);//看看两个监视文字是否有被证伪的
+			
 
-			// 检查监视点1是否被证伪
-			if (l1.value == s->trail[trail_head - 1]) {
-				watch1_falsified = (var->assignment == TRUE && !l1.sign) ||
-					(var->assignment == FALSE && l1.sign);
-			}
-			// 检查监视点2是否被证伪
-			if (l2.value == s->trail[trail_head - 1]) {
-				watch2_falsified = (var->assignment == TRUE && !l2.sign) ||
-					(var->assignment == FALSE && l2.sign);
-			}
+			
+			if (!watch1_falsified && !watch2_falsified) continue;//若两者都满足则跳过
 
-			// 如果两个监视点都没被当前赋值影响，跳过
-			if (!watch1_falsified && !watch2_falsified) continue;
-
-			// 寻找新的监视点（未被证伪的文字）
+			
 			int new_watch = -1;
 			for (unsigned int j = 0; j < c->size; j++) {
 				if (j == c->watch1 || j == c->watch2) continue;
 
 				Literals lit = c->literals[j];
-				Variable* lit_var = &s->variables[lit.value - 1];
+				Variable* lit_var = &s->variables[lit.value - 1];//在子句当中寻找新的监视文字
 
-				// 未被证伪的条件：未赋值，或赋值与符号一致
-				bool is_falsified = (lit_var->assignment == TRUE && !lit.sign) ||
-					(lit_var->assignment == FALSE && lit.sign);
-				if (!is_falsified) {
+				if (lit_var->assignment == UNSIGNNED) {
 					new_watch = j;
 					break;
 				}
+				bool is_falsified = is_literal_falsified(lit_var, lit.sign);
+				if (!is_falsified) {
+					new_watch = j;
+					break;//如果不是被证伪的，则可作为新的监视文字
+				}
 			}
 
-			// 更新监视点
 			if (new_watch != -1) {
-				if (watch1_falsified) {
+				if (watch1_falsified) 
 					c->watch1 = new_watch;
-				}
-				else if (watch2_falsified) {
+				else if (watch2_falsified) 
 					c->watch2 = new_watch;
-				}
 				continue;
-			}
+			}//如果找到了则替换
 
-			// 未找到新监视点，检查剩余监视点状态
+			
 			Variable* v1 = &s->variables[l1.value - 1];
 			Variable* v2 = &s->variables[l2.value - 1];
 
-			bool l1_satisfied = (v1->assignment == TRUE && l1.sign) ||
-				(v1->assignment == FALSE && !l1.sign);
-			bool l2_satisfied = (v2->assignment == TRUE && l2.sign) ||
-				(v2->assignment == FALSE && !l2.sign);
+			bool l1_satisfied = is_literal_satisfied(v1, l1.sign);
+			bool l2_satisfied = is_literal_satisfied(v2, l2.sign);
 
 			if (l1_satisfied || l2_satisfied) {
-				c->state = true;  // 子句已满足
+				c->state = true;  
 				continue;
-			}
+			}//如果两个监视文字有一个满足，则说明子句满足
 
-			// 单位传播或冲突
+			
 			if (v1->assignment == UNSIGNNED) {
-				// 对l1进行单位传播
+				
 				v1->assignment = l1.sign ? TRUE : FALSE;
+				s->assigned_num++;
 				v1->decision_level = s->decision_level;
 				s->trail[s->trail_size] = l1.value;
 				s->trail_level[s->trail_size++] = s->decision_level;
 			}
 			else if (v2->assignment == UNSIGNNED) {
-				// 对l2进行单位传播
 				v2->assignment = l2.sign ? TRUE : FALSE;
+				s->assigned_num++;
 				v2->decision_level = s->decision_level;
 				s->trail[s->trail_size] = l2.value;
 				s->trail_level[s->trail_size++] = s->decision_level;
 			}
-			else return false;
+			else return false;//要么有可以赋值的，要么说明冲突
 			
 		}
 	}
 	return true;
 }
 
-void backtrack(solver* s) {
-	s->decision_level -= 1;//didn't learn from conflict clauses
+void backtrack(solver* s,int level) {
+	s->decision_level -= level;//didn't learn from conflict clauses
 
 	if (s->decision_level < 0)printf("决策层为负\n");
 
@@ -258,7 +346,8 @@ void backtrack(solver* s) {
 		}//check the var
 
 		s->variables[var - 1].assignment = UNSIGNNED;
-		s->variables[var - 1].decision_level = -1;//init the assignment and the decision level
+		s->variables[var - 1].decision_level = -1;//init the assignment and the decision level in variable
+		s->assigned_num--;
 	}
 }
 
@@ -291,7 +380,7 @@ bool all_satisfied(solver*s) {
 
 int select_variables(solver*s) {
 	int var = -1;
-	int max_activity = 0;
+	double max_activity = 0;
 
 	for (int i = 0; i < s->var_count; i++) 
 			if (s->variables[i].assignment == UNSIGNNED&&s->variables[i].activity > max_activity) {
@@ -317,14 +406,7 @@ int select_variables(solver*s) {
 }
 
 bool all_assigned(solver* s) {
-	bool all_assign = true;
-
-	for (int i = 0; i < s->var_count; i++)if (s->variables[i].assignment == UNSIGNNED) {
-		all_assign = false;
-		break;
-	}
-	
-	return all_assign;
+	return s->assigned_num==s->var_count;
 }
 bool assign_new_variables(solver* s, int var, Assignment assign) {
 	s->decision_level++;
@@ -349,5 +431,9 @@ trail_error:
 	printf("trail-size超出有效范围！\n");
 	s->trail_size--;
 	return false;
+}
+
+void decay_activities(solver* s) {
+	s->var_increasement /= 0.95;  // 增量扩大，抵消衰减影响
 }
 

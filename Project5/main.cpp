@@ -2,24 +2,34 @@
 void test_for_clauses_set(solver* s, int clauses_number);
 void show_pos_pos_clauses(solver* s, int variables_number);
 FILE* open_input_file_pointer(const char* filename);
-bool get_result(solver* s);
-bool output_the_res(const char* filename, int variables_number, solver* s);
+bool get_result(solver* s,double *executation_time);
+bool output_the_res(const char* filename, int variables_number, solver* s,bool result,double executation_time);
 bool test(const char* filename);
 
 
 int main() {
-	if(!test("sat-20.cnf"))return ERROR;
-	/*if (!test("2.cnf"))return ERROR;
+	if (!test("unsat-5cnf-30.cnf"))return ERROR;
+	if (!test("sat-20.cnf"))return ERROR;
+	if (!test("ais10.cnf"))return ERROR;
+	if (!test("sud00009.cnf"))return ERROR;
+	if (!test("u-problem7-50.cnf"))return ERROR;
+	if(!test("1.cnf"))return ERROR;
+	if (!test("2.cnf"))return ERROR;
 	if (!test("3.cnf"))return ERROR;
 	if (!test("4£¨unsatisfied£©.cnf"))return ERROR;
 	if (!test("5.cnf"))return ERROR;
-	if (!test("6.cnf"))return ERROR;*/
+	if (!test("6.cnf"))return ERROR;
+	
+
+
 	return 0;
 }
 
 bool test(const char* filename) {
 	FILE* input = NULL;
 	solver* s = NULL;
+	double executation_time = 0;
+	bool result = false;
 	int variables_number = 0, clauses_number = 0;
 
 	input = open_input_file_pointer(filename);//open the input file
@@ -37,8 +47,9 @@ bool test(const char* filename) {
 
 	printf("filename is %s\n", filename);//the solver has been ready
 
-	if (get_result(s))              //the dpll
-		if (!output_the_res(filename, variables_number, s))goto error;//output
+	result = get_result(s, &executation_time);           //the dpll
+
+	if (!output_the_res(filename, variables_number, s,result,executation_time))goto error;//output
 
 	////////////////////
 
@@ -51,18 +62,22 @@ error:
 	return false;
 }
 
-bool output_the_res(const char* filename, int variables_number, solver* s) {
+bool output_the_res(const char* filename, int variables_number, solver* s,bool result,double executation_time) {
 	FILE* out;
 	char fullpath[256];
 	snprintf(fullpath, sizeof(fullpath), "%s/%s.res", "output", filename);
 	errno_t err = fopen_s(&out, fullpath, "w");
 	if (err != 0)return false;
+	fprintf(out, "s %d\n", result ? 1 : 0);
+	fprintf(out, "v ");
 	for (int i = 0; i < variables_number; i++) {
 		Assignment assign = s->variables[i].assignment;
 		if (assign == TRUE)fprintf(out, "%d ", i + 1);
 		else if (assign == FALSE)fprintf(out, "%d ", -(i + 1));
 		else if (assign == UNSIGNNED)fprintf(out, "0 ");
 	}
+	fputc('\n', out);
+	fprintf(out, "t %4f", executation_time);
 	fclose(out);
 	return true;
 }
@@ -79,14 +94,15 @@ FILE* open_input_file_pointer(const char* filename) {
 	}
 	return input;
 }
-bool get_result(solver* s) {
+bool get_result(solver* s,double *execatation_time) {
 	bool result = false;
 	clock_t start = clock();
 	result = dpll(s);
 	clock_t end = clock();
 
 	printf("clauses %s\n", result == true ? "satisfied" : "unsatisfied");
-	printf("executation time:%4fms\n", ((double)(end - start) / CLOCKS_PER_SEC)*1000);
+	*execatation_time = ((double)(end - start) / CLOCKS_PER_SEC) * 1000;
+	printf("executation time:%4fms\n",*execatation_time);
 	return result;
 }
 

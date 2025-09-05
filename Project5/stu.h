@@ -5,6 +5,8 @@
 #include<string.h>
 #include<stdbool.h>
 #define ERROR -1
+#define SIZE 9
+#define EMPTY 0
 typedef enum {
 	TRUE,
 	FALSE,
@@ -20,13 +22,15 @@ typedef struct {
 	unsigned int size;
 	int watch1, watch2;
 	bool state;
+	bool is_learned;
 }Clause;
 typedef struct {
 	Assignment assignment;
-	int activity;
+	double activity;
 	int neg_count, pos_count;
 	int decision_level;
 	Clause** pos_clauses, ** neg_clauses;
+	Clause* reason;
 }Variable;
 typedef struct {
 	Clause* clauses;
