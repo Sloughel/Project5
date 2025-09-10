@@ -1,220 +1,206 @@
 #include"stu.h"
-
-void free_solver(solver* s, int clauses_number, int variables_number) {
-	if (s == NULL)return;
-	for (int j = 0; j < variables_number; j++) {
-		if (s->variables != NULL && s->variables[j].neg_clauses != NULL) {
-			free(s->variables[j].neg_clauses);
-			s->variables[j].neg_clauses = NULL;
-		}
-		if (s->variables != NULL && s->variables[j].neg_clauses != NULL) {
-			free(s->variables[j].pos_clauses);
-			s->variables[j].pos_clauses = NULL;
-		}
-	}
-	for (int i = 0; i < clauses_number; i++)
-		if (s->clauses != NULL && s->clauses[i].literals != NULL) {
-			free(s->clauses[i].literals);
-			s->clauses[i].literals = NULL;
-		}
-	if (s->clauses != NULL)free(s->clauses);
-	if (s->variables != NULL)free(s->variables);
-	if (s->trail != NULL)free(s->trail);
-	if (s->trail_level != NULL)free(s->trail_level);
-	s->clauses = NULL;
-	s->variables = NULL;
-	s->trail = NULL;
-	s->trail_level = NULL;
-	free(s);
-	s = NULL;
-}
-
-solver* init_solver(FILE*input,int variables_number,int clause_number) {
-	solver*s = (solver*)calloc(1,sizeof(solver));
-	if (s == NULL)goto error;  //init s
-	s->clauses = NULL;
-	s->decision_level = 0;
-	s->var_count = variables_number;
-	s->clause_count = clause_number;
-	s->assigned_num = 0;
-	s->var_increasement = 1.0;//init variables under s
-
-	s->clauses = (Clause*)malloc(clause_number*sizeof(Clause));
-	for (int i = 0; i < clause_number; i++)s->clauses[i].literals = NULL;
-	s->variables = (Variable*)calloc(variables_number,sizeof(Variable));
-	s->trail = (int*)malloc(sizeof(int) * variables_number);
-	s->trail_level = (int*)malloc(sizeof(int) * variables_number);
-	if (!s->clauses || !s->variables || !s->trail || !s->trail_level)goto error;//init variables under s which need allocate memory
-	
-	for (int i = 0; i < variables_number; i++) {  //init s->variable
-		s->variables[i].assignment = UNSIGNNED;
-		s->variables[i].decision_level = -1;  //init variables under s->variable
-
-		s->variables[i].neg_clauses = (Clause**)malloc(clause_number*sizeof(Clause*));
-		s->variables[i].pos_clauses = (Clause**)malloc(clause_number*sizeof(Clause*));
-		if (s->variables[i].neg_clauses == NULL || s->variables[i].pos_clauses == NULL) goto error;//init variables under s->variable which need allocate memory
-	}
-	if (!add(s, input, clause_number, variables_number))goto error;//init variables under s->clauses
-
-	for (int i = 0; i < variables_number; i++) {
-		Clause** new_neg_clauses = (Clause**)realloc(s->variables[i].neg_clauses, sizeof(Clause*) * s->variables[i].neg_count);
-		Clause** new_pos_clauses = (Clause**)realloc(s->variables[i].pos_clauses, sizeof(Clause*) * s->variables[i].pos_count);
-		if (!new_neg_clauses || !new_pos_clauses) {
-			free(new_neg_clauses);
-			free(new_pos_clauses);
-			printf("fail to allocate memory\n");
-			goto error;
-		}
-		s->variables[i].neg_clauses = new_neg_clauses;
-		s->variables[i].pos_clauses = new_pos_clauses;
-	}//realloc
-
-	return s;
-	
-error:
-	printf("fail to allocate memory for s\n");
-	free_solver(s,clause_number,variables_number);
-	return NULL;
-}
-
-
+extern clock_t NOW, ST;
+extern bool is_over_time;
 
 bool unit_propagation(solver* s);
-void backtrack(solver* s,int level);
+void backtrack(solver* s, int level);
 bool all_satisfied(solver* s);
 int select_variables(solver* s);
 bool all_assigned(solver* s);
 bool assign_new_variables(solver* s, int var, Assignment assign);
 void decay_activities(solver* s);
 
+bool dpll(solver* s) {
+	//int NOW = clock();
+	//if ((NOW - ST) / CLOCKS_PER_SEC > 30) {
+		//is_over_time = true;
+		//return false;
+	//}// to check if it's over time
+
+	if (!unit_propagation(s))return false;//apply unit_propagation 
+
+	if (all_assigned(s)) return all_satisfied(s);// to check if all_assigned and if all assigned check if all satisfied
+
+	int var = select_variables(s);
+	if (var == -1) return all_satisfied(s);//select a new variables
+
+	decay_activities(s);
+
+	if (!assign_new_variables(s, var, TRUE))return false;;
+	s->assigned_num += 1;
+	if (dpll(s))return true;//make the variable TRUE and dpll
+
+	backtrack(s, 1);
+
+	if (!assign_new_variables(s, var, FALSE))return false;
+	s->assigned_num += 1;
+	if (dpll(s))return true;//make the variable FALSE and dpll
+
+	backtrack(s, 1);
+
+	return false;//they're all false,and it means conlict
+}
+																																											
+
+
+
+static inline bool is_literal_falsified(Variable* var, bool sign) {
+	return (var->assignment == TRUE && !sign) ||
+		(var->assignment == FALSE && sign);
+}
+static inline bool is_literal_satisfied(Variable* var, bool sign) {
+	return (var->assignment == TRUE && sign) ||
+		(var->assignment == FALSE && !sign);
+}
+
+
+
+
 Clause* analyze_conflict(solver* s, Clause* conflict_clause) {  //learn from conflict clause,也就是说这是和单元传播原则配合起来运用的
 
 	if (s == NULL || conflict_clause == NULL)return NULL;
-	Literals* learned_literals = (Literals*)malloc(sizeof(Literals)*conflict_clause->size);
-	if (learned_literals == NULL)return NULL;
-	int learned_size = conflict_clause->size;//creat new leatned_literals
-
+	int current_level = s->decision_level;
+	
+	int learned_size = conflict_clause->size;
+	Clause* learned_clause = NULL;
+	Literals* learned_literals = NULL;//init the variables
+	bool* in_learned = NULL;
+	learned_clause = (Clause*)malloc(sizeof(Clause));
+	learned_literals = (Literals*)malloc(sizeof(Literals) * conflict_clause->size);
+	if (learned_literals == NULL||learned_clause==NULL)goto error;
+	
 	memcpy(learned_literals, conflict_clause->literals, learned_size * sizeof(Literals));//copy the conflict clause
 
-	int current_level = s->decision_level;
-	int uip_count = 0;
+	in_learned= (bool*)calloc(s->var_count * 2, sizeof(bool)); // 索引：var_idx*2 + (sign?1:0)
+	if (!in_learned) goto error;
+	for (int i = 0; i < learned_size; i++) {
+		int var_idx = learned_literals[i].value - 1;
+		int idx = var_idx * 2 + (learned_literals[i].sign ? 1 : 0);
+		in_learned[idx] = true;
+	}
 
 	while (true) {
+		int uip_count = 0;
+		Literals pivot = {0,false};
 
-		uip_count = 0;
-		Literals pivot;
-		pivot.value = 0;
-		pivot.sign = false;
+		for (int i = s->trail_size - 1; i >= 0; i--) {
+			int var = s->trail[i];
+			int var_idx = var - 1;
+			if (s->variables[var_idx].decision_level != current_level) break;
 
-		for (int i = 0; i < learned_size; i++) {
-			int var_idx = learned_literals[i].value - 1;
-			if (s->variables[var_idx].decision_level == current_level) {
+			// 检查该变量的正负文字是否在学习子句中
+			bool has_pos = in_learned[var_idx * 2 + 1]; // 正文字
+			bool has_neg = in_learned[var_idx * 2 + 0]; // 负文字
+			if (has_pos || has_neg) {
+				pivot.value = var;
+				pivot.sign = has_pos; // 取在学习子句中的符号
 				uip_count++;
-				pivot = learned_literals[i];//find the decisions which are dicided in this decision level,and the last one is the point
+				break; // 找到最后一个，跳出循环
 			}
 		}
 
 		if (uip_count <= 1)break;
 
-		for (int i = 0; i < learned_size; i++) 
-			if (learned_literals[i].value == pivot.value && learned_literals[i].sign != pivot.sign) {  //去除枢纽节点的反文字
-				learned_literals[i] = learned_literals[--learned_size];
+		int complement_idx = -1;
+		int pivot_var_idx = pivot.value - 1;
+		bool complement_sign = !pivot.sign;
+		for (int i = 0; i < learned_size; i++) {
+			if (learned_literals[i].value == pivot.value && learned_literals[i].sign == complement_sign) {
+				complement_idx = i;
 				break;
 			}
+		}
+		if (complement_idx != -1) {
+			// 移除互补文字（保持数组顺序）
+			for (int i = complement_idx; i < learned_size - 1; i++) {
+				learned_literals[i] = learned_literals[i + 1];
+			}
+			learned_size--;
+			// 更新in_learned标记
+			int idx = pivot_var_idx * 2 + (complement_sign ? 1 : 0);
+			in_learned[idx] = false;
+		}
 
 			Clause* reason = s->variables[pivot.value - 1].reason;
 			if (reason == NULL)break;
 
 			for (unsigned int i = 0; i < reason->size; i++) {
 				Literals l = reason->literals[i];
-				bool exist=false;
-				for (int j = 0; j < learned_size; j++) {
-					if (learned_literals[j].value == l.value && learned_literals[i].sign == l.sign) {
-						exist = true;
-						break;
-					}
-				}
-				if (!exist) {
-					learned_literals = (Literals*)realloc(learned_literals, (learned_size + 1) * sizeof(Literals));
-					learned_literals[learned_size++] = l;
-				}
+				int var_idx = l.value - 1;
+				int idx = var_idx * 2 + (l.sign ? 1 : 0);
+				if (in_learned[idx]) continue; // 已存在则跳过
+
+				// 动态扩容并添加新文字
+				Literals* new_literals = (Literals*)realloc(learned_literals, (learned_size + 1) * sizeof(Literals));
+				if (!new_literals) goto error;
+				learned_literals = new_literals;
+				learned_literals[learned_size++] = l;
+				in_learned[idx] = true; // 更新标记
 			}
 		
 	}
 
-	Clause* learned_clause = (Clause*)malloc(sizeof(Clause));
+	
 	learned_clause->literals = (Literals*)malloc(learned_size * sizeof(Literals));
+	if (learned_clause->literals == NULL)goto error;
 	learned_clause->size = learned_size;
 	learned_clause->is_learned = true;
-	learned_clause->state = false;
 	learned_clause->watch1 = 0;
 	learned_clause->watch2 = (learned_size > 1) ? 1 : 0;
 	memcpy(learned_clause->literals, learned_literals, learned_size*sizeof(Literals));
 	free(learned_literals);
-
+	free(in_learned);
 	return learned_clause;
+error:
+	free(in_learned);
+	if (learned_literals != NULL)free(learned_literals);
+	if (learned_clause != NULL&&learned_clause->literals != NULL)free(learned_clause->literals);
+	if (learned_clause != NULL)free(learned_clause);
+	return NULL;
 }
 
 bool handle_conflict(solver* s, Clause* conflict_clause) {
 	if (s->decision_level == 0)return false;
+	int backtrack_level = 0;
 
 	Clause* learned_clause = analyze_conflict(s, conflict_clause);
 	if (learned_clause == NULL) return false;
 
-	s->clauses = (Clause*)realloc(s->clauses, (s->clause_count + 1) * sizeof(Clause));
-	if (s->clauses == NULL) {
-		free(learned_clause->literals);
-		free(learned_clause);
-		return false;
+	if (s->clause_count == s->clause_max_size) {
+		Clause* new_clauses = (Clause*)realloc(s->clauses, (s->clause_count + 10) * sizeof(Clause));
+		if (new_clauses == NULL) goto error;
+		s->clauses = new_clauses;
+		s->clause_max_size += 10;
 	}
+
 	s->clauses[s->clause_count] = *learned_clause;
 	s->clause_count++;
-	free(learned_clause); // 已复制，释放临时内存
+	
 
 	// 4. 计算回溯层级（学到的子句中最高的决策层 - 1）
-	int backtrack_level = 0;
+	
 	for (unsigned int i = 0; i < learned_clause->size; i++) {
 		int var_idx = learned_clause->literals[i].value - 1;
 		int level = s->variables[var_idx].decision_level;
-		if (level > backtrack_level && level < s->decision_level) {
-			backtrack_level = level;
-		}
+		if (level > backtrack_level && level < s->decision_level) backtrack_level = level;//找到学习子句中决策最靠后的文字的决策层
+		
 	}
 
 	// 5. 执行回溯
-	backtrack(s,s->decision_level-backtrack_level); // 需要更改
-
+	backtrack(s,s->decision_level-backtrack_level); 
+	free(learned_clause); // 已复制，释放临时内存
 	// 6. 对学到的子句执行单元传播（可能产生新的赋值）
 	return unit_propagation(s);
-	
+error:
+	if (learned_clause != NULL) {
+		free(learned_clause->literals);
+		free(learned_clause);
+	}
+	return false;
 }
 
 
 
-bool dpll(solver* s) {
-	if (!unit_propagation(s))return false;//apply unit_propagation 
-
-	if (all_assigned(s)) return all_satisfied(s);// to check if all_assigned and if all assigned check if all satisfied
-
-	int var = select_variables(s);      
-	if (var == -1) return all_satisfied(s);//select a new variables
-	
-	decay_activities(s);
-
-	if (!assign_new_variables(s, var, TRUE))return false;;
-	s->assigned_num += 1;
-	if (dpll(s))return true;//make the variable TRUE and dpll
-	
-	backtrack(s,1);
-
-	if(!assign_new_variables(s, var, FALSE))return false;
-	s->assigned_num += 1;
-	if (dpll(s))return true;//make the variable FALSE and dpll
-
-	backtrack(s,1);
-
-	return false;//they're all false,and it means conlict
-}
 
 
 void bump_variable(solver*s,int var_idx) {
@@ -226,14 +212,7 @@ void bump_variable(solver*s,int var_idx) {
 		s->var_increasement *= 1e-100;
 	}
 }
-static inline bool is_literal_falsified(Variable* var, bool sign) {
-	return (var->assignment == TRUE && !sign) ||
-		(var->assignment == FALSE && sign);
-}
-static inline bool is_literal_satisfied(Variable* var, bool sign) {
-	return (var->assignment == TRUE && sign) ||
-		(var->assignment == FALSE && !sign);
-}
+
 
 bool unit_propagation(solver* s) {
 	int trail_head = 0;
@@ -244,18 +223,13 @@ bool unit_propagation(solver* s) {
 
 		
 		Clause** clauses = (var->assignment == TRUE) ? var->neg_clauses : var->pos_clauses;
-		int clause_count = (var->assignment == TRUE) ? var->neg_count : var->pos_count;//根据赋值情况寻找变量被证伪的子句
+		int clause_count = (var->assignment == TRUE) ? var->neg_count : var->pos_count;//根据赋值情况寻找变量中被证伪的子句
 
 		bump_variable(s, var_idx);//bump the activity
-		
+		decay_activities(s);
 
 		for (int i = 0; i < clause_count; i++) {
 			Clause* c = clauses[i];//遍历证伪的子句集
-
-			//if (c->state)
-			//	continue;  //if satifyed,continue
-
-
 		
 			Literals l1 = c->literals[c->watch1];
 			Literals l2 = c->literals[c->watch2];
@@ -305,10 +279,8 @@ bool unit_propagation(solver* s) {
 			bool l1_satisfied = is_literal_satisfied(v1, l1.sign);
 			bool l2_satisfied = is_literal_satisfied(v2, l2.sign);
 
-			if (l1_satisfied || l2_satisfied) {
-				c->state = true;  
-				continue;
-			}//如果两个监视文字有一个满足，则说明子句满足
+			if (l1_satisfied || l2_satisfied) continue;
+			//如果两个监视文字有一个满足，则说明子句满足
 
 			
 			if (v1->assignment == UNSIGNNED) {
@@ -326,7 +298,7 @@ bool unit_propagation(solver* s) {
 				s->trail[s->trail_size] = l2.value;
 				s->trail_level[s->trail_size++] = s->decision_level;
 			}
-			else return false;//要么有可以赋值的，要么说明冲突
+			else /*if(!handle_conflict(s,c))*/return false;//要么有可以赋值的，要么说明冲突
 			
 		}
 	}
@@ -437,3 +409,85 @@ void decay_activities(solver* s) {
 	s->var_increasement /= 0.95;  // 增量扩大，抵消衰减影响
 }
 
+void free_solver(solver* s, int clauses_number, int variables_number) {
+	if (s == NULL)return;
+	for (int j = 0; j < variables_number; j++) {
+		if (s->variables != NULL && s->variables[j].neg_clauses != NULL) {
+			free(s->variables[j].neg_clauses);
+			s->variables[j].neg_clauses = NULL;
+		}
+		if (s->variables != NULL && s->variables[j].neg_clauses != NULL) {
+			free(s->variables[j].pos_clauses);
+			s->variables[j].pos_clauses = NULL;
+		}
+	}
+	for (int i = 0; i < clauses_number; i++)
+		if (s->clauses != NULL && s->clauses[i].literals != NULL) {
+			free(s->clauses[i].literals);
+			s->clauses[i].literals = NULL;
+		}
+	if (s->clauses != NULL)free(s->clauses);
+	if (s->variables != NULL)free(s->variables);
+	if (s->trail != NULL)free(s->trail);
+	if (s->trail_level != NULL)free(s->trail_level);
+	s->clauses = NULL;
+	s->variables = NULL;
+	s->trail = NULL;
+	s->trail_level = NULL;
+	free(s);
+	s = NULL;
+}
+
+solver* init_solver(FILE* input, int variables_number, int clause_number) {
+	solver* s = (solver*)calloc(1, sizeof(solver));
+	if (s == NULL)goto error;  //init s
+	s->clauses = NULL;
+	s->decision_level = 0;
+	s->var_count = variables_number;
+	s->clause_count = clause_number;
+	s->assigned_num = 0;
+	s->clause_max_size = clause_number;
+	s->var_increasement = 1.0;//init variables under s
+
+	s->clauses = (Clause*)malloc(clause_number * sizeof(Clause));
+	for (int i = 0; i < clause_number; i++)s->clauses[i].literals = NULL;
+	s->variables = (Variable*)calloc(variables_number, sizeof(Variable));
+	s->trail = (int*)malloc(sizeof(int) * variables_number);
+	s->trail_level = (int*)malloc(sizeof(int) * variables_number);
+	if (!s->clauses || !s->variables || !s->trail || !s->trail_level)goto error;//init variables under s which need allocate memory
+
+	for (int i = 0; i < variables_number; i++) {  //init s->variable
+		s->variables[i].assignment = UNSIGNNED;
+		s->variables[i].decision_level = -1;  //init variables under s->variable
+
+		s->variables[i].neg_clauses = (Clause**)malloc(clause_number * sizeof(Clause*));
+		s->variables[i].pos_clauses = (Clause**)malloc(clause_number * sizeof(Clause*));
+		if (s->variables[i].neg_clauses == NULL || s->variables[i].pos_clauses == NULL) goto error;//init variables under s->variable which need allocate memory
+	}
+	if (!add(s, input, clause_number, variables_number))goto error;//init variables under s->clauses
+
+	for (int i = 0; i < variables_number; i++) {
+		Clause** new_neg_clauses = NULL;
+		Clause** new_pos_clauses = NULL;
+		bool is_neg_NULL = s->variables[i].neg_count == 0;
+		bool is_pos_NULL = s->variables[i].pos_count == 0;
+		if (!is_neg_NULL)new_neg_clauses = (Clause**)realloc(s->variables[i].neg_clauses, sizeof(Clause*) * s->variables[i].neg_count);
+		if (!is_pos_NULL)new_pos_clauses = (Clause**)realloc(s->variables[i].pos_clauses, sizeof(Clause*) * s->variables[i].pos_count);
+		if ((!is_neg_NULL && !is_pos_NULL) && (!new_neg_clauses || !new_pos_clauses)) {
+			free(new_neg_clauses);
+			free(new_pos_clauses);
+
+			printf("fail to allocate memory\n");
+			goto error;
+		}
+		s->variables[i].neg_clauses = new_neg_clauses;
+		s->variables[i].pos_clauses = new_pos_clauses;
+	}//realloc
+
+	return s;
+
+error:
+	printf("fail to allocate memory for s\n");
+	free_solver(s, clause_number, variables_number);
+	return NULL;
+}

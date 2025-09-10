@@ -23,7 +23,7 @@ bool read_variables_and_clauses_num(FILE*fp,int*variable_number,int*clause_numbe
 	char ch; char buffer[1024];
 	while ((ch = fgetc(fp)) == 'c')if (fgets(buffer, sizeof(buffer), fp) == NULL)break;
 	if (ch != EOF)ungetc(ch, fp);
-	if ((ch = fgetc(fp)) == 'p')printf("find the 'p'\n");
+	if ((ch = fgetc(fp)) == 'p')/*printf("find the 'p'\n")*/;
 	else {
 		printf("didn't find the p\n");
 		return false;
@@ -84,7 +84,6 @@ bool add_clauses(solver*s,Literals *literals,int clauses_idx,int size,int variab
 	memcpy(c->literals, literals, size * sizeof(Literals));//copy
 
 	c->size = size;
-	c->state = false;
 	c->watch1 = 0;
 	c->watch2 = size > 1 ? 1 : 0;//init variables under Clauses
 

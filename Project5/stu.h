@@ -4,6 +4,9 @@
 #include<time.h>
 #include<string.h>
 #include<stdbool.h>
+extern clock_t NOW, ST;
+extern bool is_over_time;
+
 #define ERROR -1
 #define SIZE 9
 #define EMPTY 0
@@ -21,7 +24,6 @@ typedef struct {
 	Literals*literals;
 	unsigned int size;
 	int watch1, watch2;
-	bool state;
 	bool is_learned;
 }Clause;
 typedef struct {
@@ -42,6 +44,7 @@ typedef struct {
 	int trail_size;
 	int assigned_num;
 	double var_increasement;
+	int clause_max_size;
 }solver;
 
 bool read_variables_and_clauses_num(FILE* fp, int* variable_number, int* clause_number);
@@ -51,3 +54,5 @@ bool add(solver* s, FILE* input, int clauses_number, int variables_number);
 bool add_clauses(solver* s, Literals* literals, int clauses_idx, int size, int variables_number);
 void free_solver(solver* s, int clauses_number, int variables_number);
 bool dpll(solver* s);
+int get_num_from_file(FILE* fp);
+bool sudoku_test();
